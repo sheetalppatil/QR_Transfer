@@ -5,32 +5,30 @@ from qr_utils import QRDisplay, QRScanner
 from state import save_state, load_state, clear_state
 
 
+def _is_ack(data: str) -> bool:
+    try:
+        return decode_msg(data).get("t") == MSG_ACK
+    except Exception:
+        return False
+
+
 def _send_with_ack(display, scanner, msg, expected_file, expected_idx):
-    """Show data QR, wait for receiver to scan, clear display, then scan for ACK."""
+    """Show data QR and keep it visible while scanning for ACK.
+    The ACK filter ensures we only accept ACK-type QR codes,
+    ignoring any data QR codes visible to our camera (shared screen)."""
     for attempt in range(MAX_RETRIES):
         display.show(msg)
-        time.sleep(0.6)
-        display.show_text("Waiting for ACK from receiver...")
-        time.sleep(0.3)
 
-        data = scanner.scan(ACK_TIMEOUT + 1)
-        found_valid_ack = False
-        result_ok = False
-
+        data = scanner.scan(ACK_TIMEOUT + 1, filter_fn=_is_ack)
         if data:
             try:
                 m = decode_msg(data)
-                if m.get("t") == MSG_ACK:
-                    file_match = (expected_file is None) or (m.get("f") == expected_file)
-                    idx_match = (expected_idx is None) or (m.get("i") == expected_idx)
-                    if file_match and idx_match:
-                        found_valid_ack = True
-                        result_ok = m.get("s") == "ok"
+                file_match = (expected_file is None) or (m.get("f") == expected_file)
+                idx_match = (expected_idx is None) or (m.get("i") == expected_idx)
+                if file_match and idx_match:
+                    return m.get("s") == "ok"
             except Exception:
                 pass
-
-        if found_valid_ack:
-            return result_ok
 
         if attempt < MAX_RETRIES - 1:
             print(f"       * Retry {attempt + 1}/{MAX_RETRIES}...")

@@ -182,8 +182,18 @@ Timing values in `sender.py` (`_send_with_ack`) and `receiver.py` (`_ack`):
 
 | Value | Location | Description |
 |-------|----------|-------------|
-| 0.6s | sender `_send_with_ack` | How long data QR is shown before clearing |
-| 0.3s | sender `_send_with_ack` | Camera settle time after clearing display |
-| 3s | sender `_send_with_ack` | ACK scan timeout (ACK_TIMEOUT + 1) |
-| 1.2s | receiver `_ack` | How long ACK QR is shown before clearing |
-| 0.3s | receiver `_ack` | Camera settle time after clearing ACK |
+| 3s | sender `_send_with_ack` | ACK scan timeout (ACK_TIMEOUT + 1) with `_is_ack` filter |
+| 1.5s | receiver `run` loop | Data scan timeout with `_is_data` filter |
+| 0.8s | receiver `_ack` | How long ACK QR is shown before clearing |
+| 0.2s | receiver `_ack` | Brief settle after clearing ACK |
+
+### Scanner Filters
+
+Each side uses a **filter function** to read only its required QR code type:
+
+| Side | Filter | Accepts | Ignores |
+|------|--------|---------|---------|
+| Sender | `_is_ack` | `ack` (from receiver) | `fh`, `ch`, `ff`, `mf`, `done` |
+| Receiver | `_is_data` | `fh`, `ch`, `ff`, `mf`, `done` (from sender) | `ack` |
+
+The filter keeps scanning camera frames until a matching QR code is found, preventing issues from shared screens or reflections.

@@ -170,7 +170,9 @@ class QRScanner:
             pass
         cv2.waitKey(1)
 
-    def scan(self, timeout: float = 2) -> str | None:
+    def scan(self, timeout: float = 2, filter_fn=None) -> str | None:
+        """Scan for QR codes. Returns the first decoded string matching filter_fn,
+        or any QR if filter_fn is None."""
         if not self.cap:
             raise RuntimeError("Scanner not opened. Use 'with' block.")
         detector = cv2.QRCodeDetector()
@@ -182,7 +184,8 @@ class QRScanner:
                 continue
             data, points, _ = detector.detectAndDecode(frame)
             if data:
-                return data
+                if filter_fn is None or filter_fn(data):
+                    return data
             cv2.imshow(self.window_name, frame)
             key = cv2.waitKey(50)
             if key & 0xFF == ord("q"):

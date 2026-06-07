@@ -8,6 +8,13 @@ from state import save_state, load_state, clear_state
 DATA_MSG_TYPES = {MSG_FILE_HEADER, MSG_CHUNK, MSG_FILE_FOOTER, MSG_MANIFEST, MSG_DONE}
 
 
+def _is_data(data: str) -> bool:
+    try:
+        return decode_msg(data).get("t") in DATA_MSG_TYPES
+    except Exception:
+        return False
+
+
 class Receiver:
     def __init__(self, dest_dir: str, display_mode: str = None):
         self.dest_dir = dest_dir
@@ -47,7 +54,7 @@ class Receiver:
 
         with QRScanner() as scanner:
             while True:
-                data = scanner.scan(timeout=1)
+                data = scanner.scan(timeout=1.5, filter_fn=_is_data)
                 if not data:
                     continue
 
@@ -57,11 +64,6 @@ class Receiver:
                     continue
 
                 t = msg.get("t")
-
-                # Only process data-type messages (ignore ACK)
-                if t not in DATA_MSG_TYPES:
-                    continue
-
                 if t == MSG_FILE_HEADER:
                     self._handle_header(msg)
                 elif t == MSG_CHUNK:
@@ -81,9 +83,9 @@ class Receiver:
 
     def _ack(self, idx: int, status: str):
         self.display.show(make_ack(self.current_file, idx, status))
-        time.sleep(1.2)
+        time.sleep(0.8)
         self.display.show_text("Scanning for next data...")
-        time.sleep(0.3)
+        time.sleep(0.2)
 
     # ── Message handlers ────────────────────────────────────────
 
@@ -92,7 +94,7 @@ class Receiver:
         n = msg["n"]
         md5 = msg["m"]
 
-        # Duplicate header for file already in progress: just re-ACK
+        # Duplicate header for a file already in progress: just re-ACK
         if rel_path == self.current_file and n == self.expected_chunks and md5 == self.expected_md5 and self.chunks:
             self._ack(-1, "ok")
             return
@@ -189,8 +191,6 @@ class Receiver:
         for rel_path in paths:
             full = os.path.join(self.dest_dir, rel_path.replace("/", os.sep))
             if os.path.exists(full):
-                actual = file_md5(full)
-                expected = ""
                 print(f"    OK {rel_path}")
             else:
                 print(f"    X  {rel_path}  -- MISSING")
