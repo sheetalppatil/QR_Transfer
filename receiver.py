@@ -1,7 +1,11 @@
 import os
+import time
 from protocol import *
 from qr_utils import QRDisplay, QRScanner
 from state import save_state, load_state, clear_state
+
+
+DATA_MSG_TYPES = {MSG_FILE_HEADER, MSG_CHUNK, MSG_FILE_FOOTER, MSG_MANIFEST, MSG_DONE}
 
 
 class Receiver:
@@ -50,10 +54,13 @@ class Receiver:
                 try:
                     msg = decode_msg(data)
                 except Exception:
-                    print("  X Invalid QR data, skipping")
                     continue
 
                 t = msg.get("t")
+
+                # Only process data-type messages (ignore ACK)
+                if t not in DATA_MSG_TYPES:
+                    continue
 
                 if t == MSG_FILE_HEADER:
                     self._handle_header(msg)
@@ -66,8 +73,6 @@ class Receiver:
                 elif t == MSG_DONE:
                     self._handle_done()
                     break
-                else:
-                    print(f"  X Unknown message type: {t}")
 
         clear_state()
         self.display.close()
@@ -76,13 +81,25 @@ class Receiver:
 
     def _ack(self, idx: int, status: str):
         self.display.show(make_ack(self.current_file, idx, status))
+        time.sleep(1.2)
+        self.display.show_text("Scanning for next data...")
+        time.sleep(0.3)
 
     # ── Message handlers ────────────────────────────────────────
 
     def _handle_header(self, msg: dict):
         rel_path = msg["f"]
-        self.expected_chunks = msg["n"]
-        self.expected_md5 = msg["m"]
+        n = msg["n"]
+        md5 = msg["m"]
+
+        # Duplicate header for file already in progress: just re-ACK
+        if rel_path == self.current_file and n == self.expected_chunks and md5 == self.expected_md5 and self.chunks:
+            self._ack(-1, "ok")
+            return
+
+        # New file
+        self.expected_chunks = n
+        self.expected_md5 = md5
         self.chunks = {}
         self.current_file = rel_path
 
@@ -95,7 +112,7 @@ class Receiver:
             os.remove(self.temp_path)
 
         print(f"\n  {'-' * 58}")
-        print(f"  [[ {rel_path}")
+        print(f"  >> {rel_path}")
         print(f"       Chunks: {self.expected_chunks}  MD5: {self.expected_md5[:16]}...")
 
         self._ack(-1, "ok")
@@ -168,20 +185,23 @@ class Receiver:
         print(f"  ## Verifying {len(paths)} files...\n")
 
         all_ok = True
+        missing = []
         for rel_path in paths:
             full = os.path.join(self.dest_dir, rel_path.replace("/", os.sep))
             if os.path.exists(full):
                 actual = file_md5(full)
-                print(f"    OK {rel_path}  [{actual[:12]}...]")
+                expected = ""
+                print(f"    OK {rel_path}")
             else:
                 print(f"    X  {rel_path}  -- MISSING")
+                missing.append(rel_path)
                 all_ok = False
 
         print()
         if all_ok:
             print(f"  ++ ALL {len(paths)} FILES VERIFIED SUCCESSFULLY!")
         else:
-            print(f"  !! Some files have errors")
+            print(f"  !! {len(missing)} file(s) missing")
 
         self._ack(-1, "ok" if all_ok else "nak")
 

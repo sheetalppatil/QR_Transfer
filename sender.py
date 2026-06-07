@@ -6,21 +6,32 @@ from state import save_state, load_state, clear_state
 
 
 def _send_with_ack(display, scanner, msg, expected_file, expected_idx):
-    """Show a QR message and wait for a matching ACK. Retries on timeout."""
+    """Show data QR, wait for receiver to scan, clear display, then scan for ACK."""
     for attempt in range(MAX_RETRIES):
         display.show(msg)
-        data = scanner.scan(ACK_TIMEOUT)
+        time.sleep(0.6)
+        display.show_text("Waiting for ACK from receiver...")
+        time.sleep(0.3)
+
+        data = scanner.scan(ACK_TIMEOUT + 1)
+        found_valid_ack = False
+        result_ok = False
+
         if data:
             try:
                 m = decode_msg(data)
-                if (
-                    m.get("t") == MSG_ACK
-                    and m.get("f") == expected_file
-                    and m.get("i") == expected_idx
-                ):
-                    return m.get("s") == "ok"
+                if m.get("t") == MSG_ACK:
+                    file_match = (expected_file is None) or (m.get("f") == expected_file)
+                    idx_match = (expected_idx is None) or (m.get("i") == expected_idx)
+                    if file_match and idx_match:
+                        found_valid_ack = True
+                        result_ok = m.get("s") == "ok"
             except Exception:
                 pass
+
+        if found_valid_ack:
+            return result_ok
+
         if attempt < MAX_RETRIES - 1:
             print(f"       * Retry {attempt + 1}/{MAX_RETRIES}...")
     return False
@@ -64,7 +75,7 @@ def run_sender(source_dir, resume=False, display_mode=None):
 
     display.show_text(
         f"Ready to send {len(all_files)} files.\n"
-        f"Position camera at receiver screen.\n"
+        f"Point receiver camera at this screen.\n"
         f"Press ENTER on receiver first, then here."
     )
     input("  Press ENTER to start...\n")
@@ -82,7 +93,6 @@ def run_sender(source_dir, resume=False, display_mode=None):
             print(f"\n  {'-' * 58}")
             print(f"  [{idx + 1}/{len(all_files)}] {rel_path}")
 
-            # Read and chunk file
             with open(full_path, "rb") as f:
                 raw = f.read()
             md5_val = file_md5(full_path)
@@ -140,7 +150,7 @@ def run_sender(source_dir, resume=False, display_mode=None):
                 rel_path, len(chunks),
             )
             if not ok:
-                print("X MD5 mismatch")
+                print("X MD5 mismatch / no ACK")
                 continue
             print("OK")
 
@@ -156,11 +166,26 @@ def run_sender(source_dir, resume=False, display_mode=None):
                 "total_chunks": 0,
             })
 
+        # --- Manifest ---
+        if success_count > 0:
+            print(f"\n  {'-' * 58}")
+            print(f"  Sending manifest for verification...", end=" ")
+            manifest_paths = [f for f, _ in all_files]
+            ok = _send_with_ack(
+                display, scanner,
+                make_manifest(manifest_paths),
+                None, -1,
+            )
+            if ok:
+                print("VERIFIED")
+            else:
+                print("no ACK (continuing)")
+
         # --- Done ---
         print(f"\n  {'-' * 58}")
         print(f"  OK Transfer complete! {success_count} files sent.")
         display.show(make_done())
-        time.sleep(2)
+        time.sleep(3)
 
     clear_state()
     display.close()
