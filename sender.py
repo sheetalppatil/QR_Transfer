@@ -13,22 +13,29 @@ def _is_ack(data: str) -> bool:
 
 
 def _send_with_ack(display, scanner, msg, expected_file, expected_idx):
-    """Show data QR and keep it visible while scanning for ACK.
-    The ACK filter ensures we only accept ACK-type QR codes,
-    ignoring any data QR codes visible to our camera (shared screen)."""
+    """Show data QR and keep it visible while searching for matching ACK.
+    Loops on stale ACKs (wrong file/index from previous chunks)
+    until the correct ACK arrives or deadline expires."""
     for attempt in range(MAX_RETRIES):
         display.show(msg)
 
-        data = scanner.scan(ACK_TIMEOUT + 1, filter_fn=_is_ack)
-        if data:
-            try:
-                m = decode_msg(data)
-                file_match = (expected_file is None) or (m.get("f") == expected_file)
-                idx_match = (expected_idx is None) or (m.get("i") == expected_idx)
-                if file_match and idx_match:
-                    return m.get("s") == "ok"
-            except Exception:
-                pass
+        deadline = time.time() + ACK_TIMEOUT + 1
+        while time.time() < deadline:
+            data = scanner.scan(0.6, filter_fn=_is_ack)
+            if data:
+                try:
+                    m = decode_msg(data)
+                    file_match = (expected_file is None) or (m.get("f") == expected_file)
+                    idx_match = (expected_idx is None) or (m.get("i") == expected_idx)
+                    if file_match and idx_match:
+                        return m.get("s") == "ok"
+                except Exception:
+                    pass
+                # Stale ACK (e.g. from previous chunk) - brief pause,
+                # then keep scanning. The receiver will show the new
+                # ACK once it processes our current data QR.
+                time.sleep(0.1)
+            # No ACK or stale: scanner returned None or we slept, retry
 
         if attempt < MAX_RETRIES - 1:
             print(f"       * Retry {attempt + 1}/{MAX_RETRIES}...")

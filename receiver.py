@@ -82,10 +82,10 @@ class Receiver:
     # ── Internal helpers ────────────────────────────────────────
 
     def _ack(self, idx: int, status: str):
+        """Show ACK QR and KEEP it visible until the next handler replaces it.
+        This gives the sender unlimited time to scan the ACK."""
         self.display.show(make_ack(self.current_file, idx, status))
-        time.sleep(0.8)
-        self.display.show_text("Scanning for next data...")
-        time.sleep(0.2)
+        time.sleep(0.1)
 
     # ── Message handlers ────────────────────────────────────────
 

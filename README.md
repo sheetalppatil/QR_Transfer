@@ -168,32 +168,59 @@ qr_transfer/
 | Camera not found | Change camera ID in `qr_utils.py` `QRScanner.__init__(camera_id=0)` to 1 or 2. |
 | "Invalid QR data, skipping" | Camera is seeing garbage or wrong QR codes. Check positioning and lighting. |
 
-## Modifying for AI/Feature Changes
+## Architecture Notes (for AI / Feature Changes)
 
-Key constants in `protocol.py`:
+### Sync Mechanism
 
-| Constant | Default | Description |
-|----------|---------|-------------|
-| `CHUNK_SIZE` | 1200 | Raw bytes per chunk before base64 (~1600 chars in QR) |
-| `ACK_TIMEOUT` | 2 | Seconds to wait for ACK before retry |
-| `MAX_RETRIES` | 3 | Number of send attempts per message |
+The protocol avoids explicit handshake delays by using **continuous scanning** with **message-type filters**:
 
-Timing values in `sender.py` (`_send_with_ack`) and `receiver.py` (`_ack`):
+1. **Sender** shows a data QR and keeps it visible. Its scanner uses `_is_ack` filter to only accept ACK-type QR codes, ignoring its own data QR. If a stale ACK (from previous chunk) is received, the sender loops with a 0.1s pause until the receiver shows the new ACK.
 
-| Value | Location | Description |
-|-------|----------|-------------|
-| 3s | sender `_send_with_ack` | ACK scan timeout (ACK_TIMEOUT + 1) with `_is_ack` filter |
-| 1.5s | receiver `run` loop | Data scan timeout with `_is_data` filter |
-| 0.8s | receiver `_ack` | How long ACK QR is shown before clearing |
-| 0.2s | receiver `_ack` | Brief settle after clearing ACK |
+2. **Receiver** shows an ACK QR after processing each data message, and **keeps it visible** until the next handler replaces it. Its scanner uses `_is_data` filter to only accept data-type QR codes, ignoring its own ACK QR.
+
+This means:
+- No dead zones — at least one screen always shows a QR code
+- No fixed ACK display timeout — the sender has unlimited time to scan the ACK
+- Transitions happen naturally when the next data QR is processed
+
+### For Faster Transfer
+
+| Change | File | Effect |
+|--------|------|--------|
+| Increase `CHUNK_SIZE` | `protocol.py:8` | Fewer chunks per file (but larger QR codes) |
+| Decrease `ACK_TIMEOUT` | `protocol.py:9` | Faster retry cycle (but less scan time) |
+| Reduce `scanner.scan()` timeout in `_send_with_ack` | `sender.py:20` | Faster per-iteration scan (0.6s default) |
+| Reduce `scanner.scan()` timeout in receiver loop | `receiver.py:48` | Faster data scan cycle (1.5s default) |
+| Pre-generate QR images | `QRDisplay.show()` | Eliminate QR generation latency (~10-50ms per code) |
+
+### Key Constants
+
+| Constant | File:Line | Default | Description |
+|----------|-----------|---------|-------------|
+| `CHUNK_SIZE` | `protocol.py:8` | 1200 | Raw bytes per chunk before base64 (~1600 chars in QR) |
+| `ACK_TIMEOUT` | `protocol.py:9` | 2 | Seconds to wait for ACK before retry |
+| `MAX_RETRIES` | `protocol.py:10` | 3 | Number of send attempts per message |
 
 ### Scanner Filters
 
-Each side uses a **filter function** to read only its required QR code type:
+Each side uses a **filter function** so it only reads its required QR code type:
 
 | Side | Filter | Accepts | Ignores |
 |------|--------|---------|---------|
 | Sender | `_is_ack` | `ack` (from receiver) | `fh`, `ch`, `ff`, `mf`, `done` |
 | Receiver | `_is_data` | `fh`, `ch`, `ff`, `mf`, `done` (from sender) | `ack` |
 
-The filter keeps scanning camera frames until a matching QR code is found, preventing issues from shared screens or reflections.
+The filter keeps scanning camera frames until a matching QR code is found, preventing feedback loops from shared screens or reflections.
+
+### Stale ACK Handling (sender `_send_with_ack`)
+
+When the sender finishes one chunk and moves to the next, the receiver's display may still show the PREVIOUS chunk's ACK QR. The sender's scanner finds it (type `ack` matches), but the index check fails. Instead of returning failure, the sender:
+1. Pauses 0.1s
+2. Re-scans for the next 0.6s window
+3. Repeats until either the correct ACK arrives or the 3s deadline expires
+
+The correct ACK arrives once the receiver processes the current data QR (which takes ~0.5–1.5s on average). This keeps the transfer flowing without unnecessary retries.
+
+### ACK Persistence (receiver `_ack`)
+
+The receiver calls `_ack(...)` which shows the ACK QR and **immediately returns** (0.1s sleep only for display refresh). The ACK QR stays visible until the next handler (e.g., `_handle_chunk`) calls `_ack` again with a new index. This gives the sender unlimited time to scan the ACK.
