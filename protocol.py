@@ -5,7 +5,7 @@ import json
 
 # === CONFIGURATION ===
 DISPLAY_MODE = "image"   # "image" or "ascii"
-CHUNK_SIZE = 1200        # bytes per raw data chunk before base64
+CHUNK_SIZE = 100        # bytes per raw data chunk before base64
 ACK_TIMEOUT = 2          # seconds to wait for ACK
 MAX_RETRIES = 3          # max retries per message
 
